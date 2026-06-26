@@ -30,8 +30,8 @@ Type=simple
 #   WorkingDirectory / ExecStart = the absolute path to this pi_vision folder.
 #             Find it with: cd pi_vision && pwd
 User=apn7
-WorkingDirectory=/home/apn7/Thesis_Pi_zero/pi_vision
-ExecStart=/usr/bin/python3 /home/apn7/Thesis_Pi_zero/pi_vision/main.py
+WorkingDirectory=/home/apn7/Thesis_Pi_Zero/pi_vision
+ExecStart=/usr/bin/python3 /home/apn7/Thesis_Pi_Zero/pi_vision/main.py
 
 # If main.py exits (camera error, etc.) or the link drops hard, restart it.
 Restart=on-failure
