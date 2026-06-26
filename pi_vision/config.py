@@ -25,6 +25,21 @@ CAPTURE_WIDTH = 640
 CAPTURE_HEIGHT = 480
 JPEG_QUALITY = 70  # 1..100
 
+# --- Focus / sharpness -------------------------------------------------------
+# We use the mainline `imx519` dtoverlay, not Arducam's fork, so libcamera has
+# no AF algorithm loaded — LENS_POSITION / AF_MODE are ignored by picamera2.
+# The VCM defaults to position 0 (near focus) on power-on, which is blurry at
+# our 1–5 m obstacle range. We drive the VCM directly over V4L2 instead.
+#
+# The subdev exposing the lens VCM as a `focus_absolute` control (range
+# 0–4095). 2050 was measured as sharpest at the 1–5 m detection range.
+FOCUS_SUBDEV = "/dev/v4l-subdev1"
+FOCUS_ABSOLUTE = 2050
+
+# Extra picamera2 ISP controls to crisp up the JPEG before it hits the phone.
+CAPTURE_SHARPNESS = 2.0
+CAPTURE_CONTRAST = 1.1
+
 # Optional cap so we don't spin faster than useful. None = uncapped (the
 # blocking send naturally paces capture to the link speed).
 MAX_FPS = 15

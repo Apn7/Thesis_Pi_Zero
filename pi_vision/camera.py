@@ -12,13 +12,51 @@ it to JPEG. Capturing on demand (rather than running a queue) is what gives us
 
 import io
 import logging
+import subprocess
 import time
+
+import config
 
 log = logging.getLogger("pi_vision.camera")
 
 
 class CameraError(RuntimeError):
     """Raised when the camera can't be initialised or captured from."""
+
+
+def _lock_focus():
+    """Pin the lens VCM to a sharp position via V4L2, before picamera2 opens.
+
+    With the mainline `imx519` overlay there's no AF algorithm, so the VCM
+    sits at its power-on default (0 = blurry at our range). We set
+    `focus_absolute` directly on the lens subdev. This MUST run before
+    `Picamera2()` opens the device, or v4l2-ctl can fail with "device busy".
+
+    A focus failure is non-fatal: a blurry-but-running stream beats a crashed
+    service, so we log and carry on rather than aborting camera start.
+    """
+    try:
+        subprocess.run(
+            [
+                "v4l2-ctl",
+                "-d", config.FOCUS_SUBDEV,
+                "--set-ctrl", f"focus_absolute={config.FOCUS_ABSOLUTE}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        log.info(
+            "Lens focus locked: %s focus_absolute=%d",
+            config.FOCUS_SUBDEV, config.FOCUS_ABSOLUTE,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
+        stderr = getattr(e, "stderr", "") or ""
+        log.warning(
+            "Could not lock lens focus (%s)%s — continuing; frames may be soft",
+            e, f": {stderr.strip()}" if stderr.strip() else "",
+        )
 
 
 class Camera:
@@ -38,19 +76,29 @@ class Camera:
                 "it with: sudo apt install -y python3-picamera2"
             ) from e
 
+        # Drive the lens VCM before opening the device (else "device busy").
+        _lock_focus()
+
         try:
             from libcamera import Transform
             self._picam = Picamera2()
             cfg = self._picam.create_video_configuration(
                 main={"size": self._size},
                 transform=Transform(hflip=True, vflip=True),
+                controls={
+                    "Sharpness": config.CAPTURE_SHARPNESS,
+                    "Contrast": config.CAPTURE_CONTRAST,
+                },
             )
             self._picam.configure(cfg)
             # JPEG quality for capture_file(format="jpeg").
             self._picam.options["quality"] = self._quality
             self._picam.start()
-            # Let auto-exposure / auto-focus settle so the first frames aren't
-            # black or blurry.
+            # Re-assert focus AFTER start: if picamera2 reset the VCM to its
+            # power-on default when it opened the device, this pins it back to
+            # our sharp position. Harmless if it was already correct.
+            _lock_focus()
+            # Let auto-exposure settle so the first frames aren't black/dim.
             time.sleep(0.5)
             log.info("Camera started at %dx%d q=%d", *self._size, self._quality)
         except Exception as e:  # pragma: no cover - hardware dependency
