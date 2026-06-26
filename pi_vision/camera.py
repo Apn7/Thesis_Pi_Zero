@@ -39,9 +39,11 @@ class Camera:
             ) from e
 
         try:
+            from libcamera import Transform
             self._picam = Picamera2()
             cfg = self._picam.create_video_configuration(
-                main={"size": self._size}
+                main={"size": self._size},
+                transform=Transform(hflip=True, vflip=True),
             )
             self._picam.configure(cfg)
             # JPEG quality for capture_file(format="jpeg").
