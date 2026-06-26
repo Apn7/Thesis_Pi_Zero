@@ -1,0 +1,12 @@
+# Pi-side vision sender — dependencies.
+#
+# picamera2 is NOT a pip dependency here: on Raspberry Pi OS Bookworm it ships
+# as a system package built against the OS libcamera. Install it with apt, not
+# pip:
+#
+#     sudo apt update
+#     sudo apt install -y python3-picamera2
+#
+# Everything else this uses (socket, struct, argparse, subprocess) is in the
+# Python standard library. So this file is intentionally empty of pip packages
+# for Step 1 (data path). BLE provisioning (Step 2) will add `bluezero`.
