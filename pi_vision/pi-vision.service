@@ -1,0 +1,46 @@
+# systemd unit: auto-start the Pi-vision frame sender on boot.
+#
+# Runs pi_vision/main.py once the network is up, so the cane streams as soon as
+# it powers on — no laptop / SSH needed. main.py auto-detects the phone as the
+# default gateway (on the phone's hotspot) and reconnects on its own if the app
+# isn't open yet, so the Pi can boot first and just wait.
+#
+# --- INSTALL (run on the Pi, once) ---
+#   1. Edit User= and WorkingDirectory= below to match YOUR Pi (see notes).
+#   2. sudo cp pi_vision/pi-vision.service /etc/systemd/system/pi-vision.service
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable --now pi-vision.service   # start now + on every boot
+#   5. systemctl status pi-vision.service              # check it's running
+#      journalctl -u pi-vision.service -f              # follow its logs
+#
+#   To stop / disable:  sudo systemctl disable --now pi-vision.service
+
+[Unit]
+Description=Smart Cane - Pi Zero vision frame sender
+# Wait until the network is actually up (joined the hotspot) before starting.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# CHANGE THESE to match your Pi:
+#   User    = the login you set up in Raspberry Pi Imager (NOT necessarily "pi").
+#             Find it with: whoami
+#   WorkingDirectory / ExecStart = the absolute path to this pi_vision folder.
+#             Find it with: cd pi_vision && pwd
+User=apn7
+WorkingDirectory=/home/apn7/Thesis_pi_zero/pi_vision
+ExecStart=/usr/bin/python3 /home/apn7/Thesis_pi_zero/pi_vision/main.py
+
+# If main.py exits (camera error, etc.) or the link drops hard, restart it.
+Restart=on-failure
+RestartSec=3
+
+# Send Python logs straight to the journal (journalctl) without buffering.
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
