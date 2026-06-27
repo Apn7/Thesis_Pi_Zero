@@ -4,11 +4,16 @@ Rebuild guide for the Raspberry Pi Zero 2 W after an SD-card wipe/corruption.
 Reconstructed from `PI_ZERO_VISION_PLAN.md` and `STEP2_PROVISIONING_HANDOFF.md`
 plus the live `/boot/firmware/config.txt` + `cmdline.txt`.
 
-> **Scope:** this restores **Step 1 (the data path)** — the only thing ever
-> deployed to hardware. **Step 2 (BLE WiFi-provisioning) was planned but never
-> built**, so there is *no* `bluezero`, `nmcli` provisioning, or `dwc2` USB-gadget
-> setup to reinstall. WiFi works purely from the hotspot creds baked into the
-> image by Raspberry Pi Imager.
+> **Scope:** this restores **Step 1 (the camera data path)** — the original
+> hardware deployment — **plus the newer HC-SR04 sonar-over-WiFi path**
+> (**Section 7**), the WiFi replacement for the ESP32 distance sensor.
+> **Step 2 (BLE WiFi-provisioning) was planned but never built**, so there is
+> *no* `bluezero`, `nmcli` provisioning, or `dwc2` USB-gadget setup to reinstall.
+> WiFi works purely from the hotspot creds baked into the image by Raspberry Pi
+> Imager.
+>
+> The camera and sonar are **independent** — you can restore one without the
+> other. Sections 1–6 are the camera; Section 7 is the sonar.
 
 ---
 
@@ -18,7 +23,10 @@ plus the live `/boot/firmware/config.txt` + `cmdline.txt`.
   (the systemd unit hard-codes this path — match it or edit the unit)
 - IMX519 camera visible via libcamera (`dtoverlay=imx519`, `camera_auto_detect=0`)
 - `python3-picamera2` + `v4l-utils` installed (focus lock calls `v4l2-ctl`)
-- Pi and phone on the same network (hotspot creds baked into the image)
+- Pi and phone on the same network (hotspot creds baked into the image) —
+  **camera streams on port 8765, sonar on port 8766**
+- *(sonar)* HC-SR04 wired per **Section 7.1**; `python3-lgpio` present (it ships
+  with Bookworm) — no daemon needed
 
 ---
 
@@ -81,7 +89,7 @@ rpicam-hello --list-cameras         # should list the imx519
 `--no-install-recommends` — important on the Pi Zero's 512 MB:
 
 ```bash
-sudo apt update
+sudo apt update && apt upgrade -y
 sudo apt install -y --no-install-recommends python3-picamera2 v4l-utils git
 ```
 - `python3-picamera2` — camera capture (apt, **never** pip)
@@ -89,6 +97,9 @@ sudo apt install -y --no-install-recommends python3-picamera2 v4l-utils git
 - `git` — to pull the code
 
 No pip packages needed — Step 1 uses only the Python standard library.
+
+> *(Sonar)* the HC-SR04 path uses **`python3-lgpio`**, which already ships with
+> Bookworm — see **Section 7.2**. No daemon, no pip.
 
 ---
 
@@ -125,6 +136,74 @@ sudo systemctl enable --now pi-vision.service
 systemctl status pi-vision.service
 journalctl -u pi-vision.service -f
 ```
+
+---
+
+## 7. HC-SR04 sonar — distance over WiFi (replaces the ESP32)
+
+The cane's obstacle distance now comes from an **HC-SR04 on the Pi**, streamed to
+the phone over WiFi on **port 8766** (separate from the camera's 8765). This is
+the WiFi replacement for the old ESP32 Bluetooth sensor; the phone classifies the
+distance into the same CRITICAL / WARNING / CAUTION alerts. Independent of the
+camera — different GPIOs, different port, separate systemd unit.
+
+### 7.1 Wiring (Pi powered OFF while wiring)
+| HC-SR04 | Connection | Pi Zero |
+|---|---|---|
+| VCC  | direct               | 5V · pin 2 |
+| TRIG | direct               | GPIO23 · pin 16 |
+| ECHO | **4.5 kΩ in series** | GPIO24 · pin 18 |
+| GND  | direct               | GND · pin 6 |
+
+ECHO swings to 5V but the Pi GPIO is 3.3V-max, so the single **4.5 kΩ resistor in
+series** limits current into the pin's clamp diodes to ~0.4 mA (safe). **Never**
+wire ECHO straight to the GPIO — it damages the Pi. (Pins are configurable in
+`pi_vision/config.py`: `SONAR_TRIG_GPIO` / `SONAR_ECHO_GPIO`.)
+
+### 7.2 GPIO library — lgpio (no daemon)
+The reader uses **lgpio**, the native Bookworm GPIO library, which reads the
+echo via kernel-timestamped edge callbacks. It normally ships with Bookworm; if
+`import lgpio` fails, install it (and make sure your user can access the GPIO):
+```bash
+sudo apt install -y python3-lgpio
+sudo usermod -aG gpio $USER     # then log out / back in (only if needed)
+```
+> **Note:** pigpio is *not* used — its daemon was dropped from Bookworm's repos
+> (it doesn't work on the Pi 5). lgpio needs no daemon, so there's nothing to
+> enable or keep running.
+
+### 7.3 Manual test (before automating)
+**Phone:** hotspot ON, app open on the home screen (it listens on port 8766).
+**Pi:**
+```bash
+cd /home/apn7/Thesis_Pi_Zero/pi_vision
+python3 sonar_main.py            # auto-detects phone as default gateway (hotspot)
+# or on shared WiFi:  python3 sonar_main.py --host <PHONE_IP>
+```
+Expect `HC-SR04 ready via pigpio…` then `Connected to <phone>:8766`. Wave your
+hand in front of the sensor — the phone's distance card should react and show the
+verdict change. `Ctrl+C` to stop.
+
+### 7.4 Auto-start on boot — systemd
+```bash
+sudo cp /home/apn7/Thesis_Pi_Zero/pi_vision/pi-sonar.service /etc/systemd/system/pi-sonar.service
+# Confirm User= and the two paths in the file match (whoami / pwd)
+sudo systemctl daemon-reload
+sudo systemctl enable --now pi-sonar.service
+systemctl status pi-sonar.service
+journalctl -u pi-sonar.service -f
+```
+Runs alongside `pi-vision.service` (camera). No daemon dependency — lgpio is a
+plain library.
+
+### 7.5 If it fails
+- `lgpio not installed` → `sudo apt install -y python3-lgpio`.
+- `Could not open gpiochip0` / permission denied → add the user to the gpio
+  group: `sudo usermod -aG gpio $USER`, then log out and back in.
+- `Connect to <phone>:8766 failed` → phone hotspot off or app not open; it
+  auto-retries, so just open the app.
+- Readings stuck at max distance or `-1` → recheck **7.1** wiring, especially
+  ECHO through the resistor and a shared GND between sensor and Pi.
 
 ---
 

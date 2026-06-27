@@ -71,6 +71,10 @@ SONAR_PORT = 8766
 SONAR_TRIG_GPIO = 23
 SONAR_ECHO_GPIO = 24
 
+# gpiochip the pins live on. Pi Zero 2 W (and Pi 1–4) = chip 0; the Pi 5 moved
+# the 40-pin header to chip 4.
+SONAR_GPIOCHIP = 0
+
 # Max range the sensor reports (metres). gpiozero saturates at this value when
 # nothing is in range; we treat that as a clear path (SAFE on the phone), not a
 # fault.
@@ -89,6 +93,7 @@ SONAR_MEDIAN_WINDOW = 5
 # (4 m round trip ≈ 23 ms; 40 ms leaves margin).
 SONAR_ECHO_TIMEOUT_S = 0.04
 
-# Trigger pulse width (µs) — the HC-SR04 spec is 10 µs. pigpio generates this
-# in the daemon, so the width is precise regardless of Python scheduling.
+# Trigger pulse width (µs) — the HC-SR04 spec is 10 µs. We hold TRIG high for
+# this long with a tight busy-wait; a bit longer is harmless since only the ECHO
+# timing (measured from kernel callback timestamps) affects the distance.
 SONAR_TRIGGER_PULSE_US = 10

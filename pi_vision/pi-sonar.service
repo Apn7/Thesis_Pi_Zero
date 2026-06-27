@@ -24,11 +24,9 @@
 [Unit]
 Description=Smart Cane - Pi Zero HC-SR04 distance sender
 # Wait until the network is up (joined the hotspot) before starting. The reader
-# REQUIRES pigpiod (DMA-timed echo callbacks), so pull it in and order after it.
-# Wants (not Requires) so a missing pigpiod doesn't mask the clearer error the
-# reader prints.
-After=network-online.target pigpiod.service
-Wants=network-online.target pigpiod.service
+# uses lgpio directly (no daemon), so there's nothing else to order against.
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
