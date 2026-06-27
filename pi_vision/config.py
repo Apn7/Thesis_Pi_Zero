@@ -51,3 +51,44 @@ RECONNECT_BACKOFF_MAX = 5.0
 # Per-frame send timeout; a stalled phone shouldn't wedge the sender forever.
 SEND_TIMEOUT_S = 5.0
 CONNECT_TIMEOUT_S = 5.0
+
+# ── Sonar (HC-SR04 distance over WiFi) ───────────────────────────────────────
+# A separate, tiny text stream that REPLACES the ESP32 ultrasonic path. The Pi
+# reads the HC-SR04 and pushes newline-delimited centimetre readings to the
+# phone, which classifies them into the same CRITICAL/WARNING/CAUTION verdicts
+# it used for the ESP32. Runs alongside the camera: distinct GPIOs, distinct TCP
+# port, so the two never interfere.
+#
+# Keep in sync with the app's constants.dart:
+#   SONAR_PORT == AppConstants.piDistancePort
+
+# TCP port the *phone* listens on for distance. The Pi dials it (same role
+# reversal as the camera path). Must equal AppConstants.piDistancePort.
+SONAR_PORT = 8766
+
+# BCM GPIO numbers (see the wiring diagram). TRIG drives the sensor directly;
+# ECHO comes back through the single 4.5 kΩ series resistor into GPIO24.
+SONAR_TRIG_GPIO = 23
+SONAR_ECHO_GPIO = 24
+
+# Max range the sensor reports (metres). gpiozero saturates at this value when
+# nothing is in range; we treat that as a clear path (SAFE on the phone), not a
+# fault.
+SONAR_MAX_DISTANCE_M = 4.0
+
+# How often we read + send a distance (seconds). ~5 Hz mirrors the old ESP32
+# cadence and is plenty for walking-speed obstacle alerts.
+SONAR_INTERVAL_S = 0.2
+
+# Median smoothing: we keep the last N single-ping readings and report their
+# median, which rejects the occasional wild outlier without adding much lag.
+# 5 @ 5 Hz ≈ a 0.4 s effective lag; drop to 3 for snappier response.
+SONAR_MEDIAN_WINDOW = 5
+
+# How long to wait for the echo to return before calling it out-of-range
+# (4 m round trip ≈ 23 ms; 40 ms leaves margin).
+SONAR_ECHO_TIMEOUT_S = 0.04
+
+# Trigger pulse width (µs) — the HC-SR04 spec is 10 µs. pigpio generates this
+# in the daemon, so the width is precise regardless of Python scheduling.
+SONAR_TRIGGER_PULSE_US = 10

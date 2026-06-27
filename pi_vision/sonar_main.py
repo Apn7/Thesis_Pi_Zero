@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""Pi-side entry point: capture IMX519 frames and stream them to the phone.
+"""Pi-side entry point: read the HC-SR04 and stream distance to the phone.
 
-Step 1 of PI_ZERO_VISION_PLAN.md (data path, no BLE yet). The phone runs the
-TCP server (`PiFrameServer`); this dials it and pushes length-prefixed JPEGs.
+The WiFi replacement for the ESP32 ultrasonic path. The phone runs the TCP
+server (`PiDistanceService`, mirroring `PiFrameServer`); this dials it and
+pushes newline-delimited centimetre readings. The phone classifies them into
+the same CRITICAL/WARNING/CAUTION verdicts it used for the ESP32 — so no
+firmware-style thresholds live here.
 
 Usage:
-    python3 main.py                 # auto-detect the phone (default gateway)
-    python3 main.py --host 192.168.1.50
-    python3 main.py --host 192.168.43.1 --port 8765 --width 640 --height 480
+    python3 sonar_main.py                       # auto-detect the phone (gateway)
+    python3 sonar_main.py --host 192.168.43.1
+    python3 sonar_main.py --port 8766 --interval 0.2 --max-distance 4.0
 
 On a phone hotspot the phone is the Pi's default gateway, so `--host` can be
 omitted. On a shared home WiFi (handy for early testing) the gateway is the
-router, not the phone, so pass the phone's IP with `--host`.
+router, so pass the phone's IP with `--host`.
+
+Runs happily alongside main.py (camera): different GPIOs, different TCP port —
+both just need the phone reachable on WiFi.
 """
 
 import argparse
@@ -21,15 +27,15 @@ import sys
 import time
 
 import config
-from camera import Camera, CameraError
-from frame_sender import FrameSender
 from gateway import detect_gateway
+from sonar_reader import NO_READING, Sonar, SonarError
+from sonar_sender import SonarSender
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
-log = logging.getLogger("pi_vision.main")
+log = logging.getLogger("pi_vision.sonar_main")
 
 _running = True
 
@@ -41,15 +47,15 @@ def _handle_signal(signum, _frame):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Pi Zero vision frame sender")
+    p = argparse.ArgumentParser(description="Pi Zero HC-SR04 distance sender")
     p.add_argument("--host", default=None,
                    help="Phone IP. Default: auto-detect (default gateway).")
-    p.add_argument("--port", type=int, default=config.FRAME_PORT)
-    p.add_argument("--width", type=int, default=config.CAPTURE_WIDTH)
-    p.add_argument("--height", type=int, default=config.CAPTURE_HEIGHT)
-    p.add_argument("--quality", type=int, default=config.JPEG_QUALITY)
-    p.add_argument("--max-fps", type=float, default=config.MAX_FPS,
-                   help="0 or negative = uncapped.")
+    p.add_argument("--port", type=int, default=config.SONAR_PORT)
+    p.add_argument("--interval", type=float, default=config.SONAR_INTERVAL_S,
+                   help="Seconds between readings.")
+    p.add_argument("--max-distance", type=float,
+                   default=config.SONAR_MAX_DISTANCE_M,
+                   help="Sensor max range in metres.")
     return p.parse_args()
 
 
@@ -68,26 +74,21 @@ def resolve_host(args):
 
 
 def run(args, host):
-    """Main capture→send loop with reconnect/backoff. Returns an exit code."""
-    min_frame_interval = (
-        1.0 / args.max_fps if args.max_fps and args.max_fps > 0 else 0.0
-    )
-
-    camera = Camera(args.width, args.height, args.quality)
+    """Main read→send loop with reconnect/backoff. Returns an exit code."""
+    sonar = Sonar(max_distance_m=args.max_distance)
     try:
-        camera.start()
-    except CameraError as e:
+        sonar.start()
+    except SonarError as e:
         log.error("%s", e)
         return 2
 
-    sender = FrameSender(host, args.port)
+    sender = SonarSender(host, args.port)
     backoff = config.RECONNECT_BACKOFF_START
-    last_frame_at = 0.0
-    frames_sent = 0
+    readings_sent = 0
 
     try:
         while _running:
-            # 1) Ensure we have a live connection (the app may not be up yet).
+            # 1) Ensure a live connection (the app may not be up yet).
             if not sender.connected:
                 try:
                     sender.connect()
@@ -101,38 +102,31 @@ def run(args, host):
                     backoff = min(backoff * 2, config.RECONNECT_BACKOFF_MAX)
                     continue
 
-            # 2) Pace to the FPS cap.
-            if min_frame_interval:
-                wait = min_frame_interval - (time.monotonic() - last_frame_at)
-                if wait > 0:
-                    _interruptible_sleep(wait)
-            last_frame_at = time.monotonic()
-
-            # 3) Capture the freshest frame and push it.
+            # 2) Read one distance and push it.
+            cm = sonar.read_cm()
             try:
-                jpeg = camera.capture_jpeg()
-            except CameraError as e:
-                # Camera went away mid-run — unrecoverable here, bail out so
-                # systemd (later) can restart us cleanly.
-                log.error("Capture failed: %s", e)
-                return 2
-
-            try:
-                sender.send(jpeg)
-                frames_sent += 1
-                if frames_sent % 30 == 0:
-                    log.info("Sent %d frames (last %d bytes)", frames_sent, len(jpeg))
+                sender.send_cm(cm)
+                readings_sent += 1
+                if readings_sent % 50 == 0:
+                    label = "no-echo" if cm == NO_READING else f"{cm:.1f}cm"
+                    log.info("Sent %d readings (last %s)", readings_sent, label)
             except ConnectionError as e:
                 log.warning("Link dropped (%s) — will reconnect", e)
                 # Loop back; the `not sender.connected` branch reconnects.
+                continue
+
+            # 3) Pace to the configured interval.
+            _interruptible_sleep(args.interval)
     finally:
         sender.close()
-        camera.stop()
+        sonar.close()
     return 0
 
 
 def _interruptible_sleep(seconds):
     """Sleep in small slices so a signal stops us promptly."""
+    if seconds <= 0:
+        return
     end = time.monotonic() + seconds
     while _running and time.monotonic() < end:
         time.sleep(min(0.1, end - time.monotonic()))

@@ -1,0 +1,55 @@
+# systemd unit: auto-start the HC-SR04 distance sender on boot.
+#
+# Runs sonar_main.py once the network is up, so the cane reports distance as
+# soon as it powers on — no laptop / SSH needed. sonar_main.py auto-detects the
+# phone as the default gateway (on the phone's hotspot) and reconnects on its
+# own if the app isn't open yet, so the Pi can boot first and just wait.
+#
+# This is the WiFi replacement for the ESP32 ultrasonic path; it runs alongside
+# pi-vision.service (camera) — different GPIOs, different TCP port.
+#
+# --- INSTALL (run on the Pi, once) ---
+#   1. Edit User= and WorkingDirectory=/ExecStart= below to match YOUR Pi.
+#   2. (Recommended) steadier readings via pigpio:
+#        sudo apt install python3-gpiozero python3-pigpio
+#        sudo systemctl enable --now pigpiod
+#   3. sudo cp pi_vision/pi-sonar.service /etc/systemd/system/pi-sonar.service
+#   4. sudo systemctl daemon-reload
+#   5. sudo systemctl enable --now pi-sonar.service   # start now + on every boot
+#   6. systemctl status pi-sonar.service              # check it's running
+#      journalctl -u pi-sonar.service -f              # follow its logs
+#
+#   To stop / disable:  sudo systemctl disable --now pi-sonar.service
+
+[Unit]
+Description=Smart Cane - Pi Zero HC-SR04 distance sender
+# Wait until the network is up (joined the hotspot) before starting. The reader
+# REQUIRES pigpiod (DMA-timed echo callbacks), so pull it in and order after it.
+# Wants (not Requires) so a missing pigpiod doesn't mask the clearer error the
+# reader prints.
+After=network-online.target pigpiod.service
+Wants=network-online.target pigpiod.service
+
+[Service]
+Type=simple
+
+# CHANGE THESE to match your Pi:
+#   User    = the login you set up in Raspberry Pi Imager (NOT necessarily "pi").
+#             Find it with: whoami
+#   WorkingDirectory / ExecStart = the absolute path to this pi_vision folder.
+#             Find it with: cd pi_vision && pwd
+User=apn7
+WorkingDirectory=/home/apn7/Thesis_Pi_Zero/pi_vision
+ExecStart=/usr/bin/python3 /home/apn7/Thesis_Pi_Zero/pi_vision/sonar_main.py
+
+# If sonar_main.py exits (sensor error, etc.) or the link drops hard, restart it.
+Restart=on-failure
+RestartSec=3
+
+# Send Python logs straight to the journal (journalctl) without buffering.
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
