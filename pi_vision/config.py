@@ -45,7 +45,9 @@ JPEG_QUALITY = 70  # 1..100
 # objects, and paste it below. The old 2050 was tuned on near/indoor objects,
 # which is why far/outdoor frames were soft.
 FOCUS_SUBDEV = "/dev/v4l-subdev1"
-FOCUS_ABSOLUTE = 2050  # ← re-measure outdoors with focus_test.py, then update
+# Measured outdoors with focus_test.py (2026-06-29): broad sharpness plateau at
+# 1675–1750, peak 1700 (~30× sharper on far objects than the old near-tuned 2050).
+FOCUS_ABSOLUTE = 1700  # hyperfocal lock; re-run focus_test.py if the lens/mount changes
 
 # Extra picamera2 ISP controls to crisp up the JPEG before it hits the phone.
 CAPTURE_SHARPNESS = 2.0
