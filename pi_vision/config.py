@@ -70,12 +70,17 @@ AE_EXPOSURE_MODE_SHORT = True
 
 # Sensor frame-duration limits (min_us, max_us). This clamps the per-frame SENSOR
 # time, and the max also bounds the longest shutter the AGC can pick (the shutter
-# can't exceed the frame it lives in). 16666 µs ≈ 60 fps, 33333 µs ≈ 30 fps, so
-# the AGC may stretch the shutter to at most ~33 ms before it must add gain.
+# can't exceed the frame it lives in) — WHILE keeping auto-exposure alive, so the
+# AGC raises GAIN to keep brightness instead of going dark (unlike a hard
+# ExposureTime cap). max=8000 µs caps the shutter at ~8 ms to freeze cane-swing
+# motion; in dim light the AGC then pushes gain up rather than lengthening the
+# shutter. Tighten max toward 5000–6000 for less blur (darker/noisier), or raise
+# toward 10000–12000 for more light (more blur). This is the PRIMARY motion-blur
+# knob now that the hard cap below is off.
 # NOTE: this is the SENSOR clamp, NOT the software pacing knob below — MAX_FPS
 # throttles how often *we* capture/send; this bounds the exposure physics. They
-# are independent: capturing at 15 fps still lets the sensor expose for ≤33 ms.
-FRAME_DURATION_LIMITS_US = (16666, 33333)
+# are independent: capturing at 15 fps still lets the sensor expose for ≤8 ms.
+FRAME_DURATION_LIMITS_US = (5000, 8000)
 
 # Optional HARD shutter cap (µs). A short, fixed shutter is the surest way to
 # freeze motion — ~5000 µs (5 ms) freezes normal walking / cane-swing. But a hard
@@ -83,7 +88,9 @@ FRAME_DURATION_LIMITS_US = (16666, 33333)
 # shutter for dark scenes (it must lean entirely on gain), so set this only if
 # the Short + FRAME_DURATION_LIMITS_US approach above isn't freezing motion
 # enough. None = let the AGC choose the shutter within the frame-duration limit.
-MAX_EXPOSURE_TIME_US = 5000  # hard 5 ms cap to freeze cane-swing motion (2026-06-29)
+MAX_EXPOSURE_TIME_US = None  # hard cap made frames DARK (it disables AE → gain stops
+                             # compensating). Cap the shutter via FRAME_DURATION_LIMITS_US
+                             # above instead, which keeps AE/gain alive. (2026-06-29)
 
 # Optional cap so we don't spin faster than useful. None = uncapped (the
 # blocking send naturally paces capture to the link speed).
