@@ -83,7 +83,7 @@ FRAME_DURATION_LIMITS_US = (16666, 33333)
 # shutter for dark scenes (it must lean entirely on gain), so set this only if
 # the Short + FRAME_DURATION_LIMITS_US approach above isn't freezing motion
 # enough. None = let the AGC choose the shutter within the frame-duration limit.
-MAX_EXPOSURE_TIME_US = None  # e.g. 5000 for a hard 5 ms cap
+MAX_EXPOSURE_TIME_US = 5000  # hard 5 ms cap to freeze cane-swing motion (2026-06-29)
 
 # Optional cap so we don't spin faster than useful. None = uncapped (the
 # blocking send naturally paces capture to the link speed).
