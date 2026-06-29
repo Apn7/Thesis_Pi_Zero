@@ -80,15 +80,34 @@ class Camera:
         _lock_focus()
 
         try:
-            from libcamera import Transform
+            from libcamera import Transform, controls as libcontrols
             self._picam = Picamera2()
+            # Exposure controls that FREEZE MOTION BLUR: keep auto-exposure on so
+            # it still adapts to lighting, but bias/clamp it toward a short
+            # shutter (letting gain rise instead). See config.py's exposure
+            # section for the full rationale. Optional entries are only added when
+            # enabled so we never pass controls libcamera would reject.
+            cap_controls = {
+                "Sharpness": config.CAPTURE_SHARPNESS,
+                "Contrast": config.CAPTURE_CONTRAST,
+                "AeEnable": True,  # keep AGC adapting to ambient light
+                # Clamp the sensor frame time; the max also caps the longest
+                # shutter the AGC may choose (shutter ≤ frame duration).
+                "FrameDurationLimits": tuple(config.FRAME_DURATION_LIMITS_US),
+            }
+            if config.AE_EXPOSURE_MODE_SHORT:
+                # Bias the AGC to prefer shorter exposures (more gain, less blur).
+                cap_controls["AeExposureMode"] = (
+                    libcontrols.AeExposureModeEnum.Short
+                )
+            if config.MAX_EXPOSURE_TIME_US is not None:
+                # Hard shutter cap — surest motion freeze, but disables auto
+                # brightness adaptation (the AGC can no longer lengthen shutter).
+                cap_controls["ExposureTime"] = config.MAX_EXPOSURE_TIME_US
             cfg = self._picam.create_video_configuration(
                 main={"size": self._size},
                 transform=Transform(hflip=True, vflip=True),
-                controls={
-                    "Sharpness": config.CAPTURE_SHARPNESS,
-                    "Contrast": config.CAPTURE_CONTRAST,
-                },
+                controls=cap_controls,
             )
             self._picam.configure(cfg)
             # JPEG quality for capture_file(format="jpeg").

@@ -31,14 +31,57 @@ JPEG_QUALITY = 70  # 1..100
 # The VCM defaults to position 0 (near focus) on power-on, which is blurry at
 # our 1–5 m obstacle range. We drive the VCM directly over V4L2 instead.
 #
-# The subdev exposing the lens VCM as a `focus_absolute` control (range
-# 0–4095). 2050 was measured as sharpest at the 1–5 m detection range.
+# HYPERFOCAL FIXED FOCUS (the design choice — NOT autofocus):
+# Autofocus "hunts" (re-racks the lens searching) which blurs frames and adds
+# latency on a constantly-moving cane. Instead we lock the VCM once at the
+# *hyperfocal distance* — the focus where everything from ~half that distance to
+# infinity is acceptably sharp. For this IMX519 module (f≈4.28 mm, f/2.2, 1/2.53"
+# sensor) the hyperfocal distance is ≈2 m, so focusing there yields ~1 m → ∞
+# sharp, covering the whole 1–5 m+ detection range with no moving parts.
+#
+# `focus_absolute` is a raw VCM DAC value (range 0–4095), NOT metres, so the
+# hyperfocal setting must be found empirically: run `focus_test.py` OUTDOORS
+# pointing down a footpath, pick the value that maximises sharpness on FAR
+# objects, and paste it below. The old 2050 was tuned on near/indoor objects,
+# which is why far/outdoor frames were soft.
 FOCUS_SUBDEV = "/dev/v4l-subdev1"
-FOCUS_ABSOLUTE = 2050
+FOCUS_ABSOLUTE = 2050  # ← re-measure outdoors with focus_test.py, then update
 
 # Extra picamera2 ISP controls to crisp up the JPEG before it hits the phone.
 CAPTURE_SHARPNESS = 2.0
 CAPTURE_CONTRAST = 1.1
+
+# --- Exposure / shutter (motion-blur control) --------------------------------
+# The cane swings constantly, so the dominant image-quality problem isn't focus,
+# it's MOTION BLUR: a long shutter smears moving edges and wrecks on-phone YOLO.
+# picamera2's auto-exposure (AGC) drives `analogue_gain × exposure_time` to hit a
+# brightness target; left alone it happily picks a long shutter in dim light. We
+# bias it the other way — keep the SHUTTER SHORT, let GAIN rise to compensate.
+# The tradeoff is more sensor noise in low light, which YOLO tolerates far better
+# than blur. We keep AGC ON (AeEnable) so it still adapts to lighting; we just
+# constrain the shutter it's allowed to choose.
+
+# Bias the AGC toward shorter exposures (libcamera AeExposureModeEnum.Short).
+# This nudges it to prefer gain over shutter without a hard cap, so it stays
+# adaptive. Set False to use libcamera's default (Normal) metering.
+AE_EXPOSURE_MODE_SHORT = True
+
+# Sensor frame-duration limits (min_us, max_us). This clamps the per-frame SENSOR
+# time, and the max also bounds the longest shutter the AGC can pick (the shutter
+# can't exceed the frame it lives in). 16666 µs ≈ 60 fps, 33333 µs ≈ 30 fps, so
+# the AGC may stretch the shutter to at most ~33 ms before it must add gain.
+# NOTE: this is the SENSOR clamp, NOT the software pacing knob below — MAX_FPS
+# throttles how often *we* capture/send; this bounds the exposure physics. They
+# are independent: capturing at 15 fps still lets the sensor expose for ≤33 ms.
+FRAME_DURATION_LIMITS_US = (16666, 33333)
+
+# Optional HARD shutter cap (µs). A short, fixed shutter is the surest way to
+# freeze motion — ~5000 µs (5 ms) freezes normal walking / cane-swing. But a hard
+# ExposureTime DISABLES auto-adaptation: the AGC can no longer lengthen the
+# shutter for dark scenes (it must lean entirely on gain), so set this only if
+# the Short + FRAME_DURATION_LIMITS_US approach above isn't freezing motion
+# enough. None = let the AGC choose the shutter within the frame-duration limit.
+MAX_EXPOSURE_TIME_US = None  # e.g. 5000 for a hard 5 ms cap
 
 # Optional cap so we don't spin faster than useful. None = uncapped (the
 # blocking send naturally paces capture to the link speed).
