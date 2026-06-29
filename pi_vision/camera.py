@@ -59,29 +59,6 @@ def _lock_focus():
         )
 
 
-def _select_sensor_mode(picam, want_size):
-    """Find the sensor mode whose readout size equals `want_size`.
-
-    libcamera, asked only for a small output size, picks a sensor mode without
-    regard to its crop and can land on a heavily-cropped (narrow-FoV) mode. To
-    force the full-field-of-view mode we look it up explicitly in the sensor's
-    advertised modes and pass it back as the raw stream.
-
-    Returns the matching mode dict from `picam.sensor_modes` (which carries the
-    exact format/bit-depth, not just a size), or None if the sensor doesn't
-    advertise that size — in which case the caller falls back to libcamera's
-    auto-selection rather than failing.
-    """
-    if want_size is None:
-        return None
-    want = (int(want_size[0]), int(want_size[1]))
-    for mode in picam.sensor_modes:
-        size = mode.get("size")
-        if size and (int(size[0]), int(size[1])) == want:
-            return mode
-    return None
-
-
 class Camera:
     def __init__(self, width, height, quality):
         self._size = (int(width), int(height))
@@ -131,35 +108,35 @@ class Camera:
                 main={"size": self._size},
                 transform=Transform(hflip=True, vflip=True),
                 controls=cap_controls,
+                # Cap how many in-flight buffers libcamera allocates. The default
+                # for video is 6; with the big full-FoV raw stream below that
+                # overflows the Pi Zero's small CMA pool ("Cannot allocate
+                # memory"). We capture newest-frame-wins on demand, so a few
+                # buffers is plenty.
+                buffer_count=config.CAMERA_BUFFER_COUNT,
             )
-            # Force the full-FoV sensor mode (see config.SENSOR_OUTPUT_SIZE).
-            # We add it as the raw stream only if the sensor actually advertises
-            # that mode; otherwise we leave it out and let libcamera auto-select
-            # rather than risk a config that won't apply.
-            mode = _select_sensor_mode(self._picam, config.SENSOR_OUTPUT_SIZE)
-            if config.SENSOR_OUTPUT_SIZE is not None and mode is None:
-                log.warning(
-                    "Requested sensor mode %s not advertised — falling back to "
-                    "auto-selection (FoV may be cropped). Available sizes: %s",
-                    tuple(config.SENSOR_OUTPUT_SIZE),
-                    [m.get("size") for m in self._picam.sensor_modes],
-                )
-            if mode is not None:
-                # Pass the full mode dict (exact size + format + bit depth) so
-                # libcamera pins this mode and can't drop back to a cropped one.
-                cfg_kwargs["raw"] = mode
+            # Force the full-FoV sensor mode (see config.SENSOR_OUTPUT_SIZE) by
+            # requesting a large raw-stream size: libcamera then selects the
+            # sensor mode closest to it (the full-array 2x2-binned mode) instead
+            # of the cropped default it picks from the small `main` size alone.
+            # We pass only the size (not a probed mode dict) so we never touch
+            # picam.sensor_modes, which would reconfigure/probe every mode —
+            # including the 16 MP one — and stress memory on boot.
+            if config.SENSOR_OUTPUT_SIZE is not None:
+                cfg_kwargs["raw"] = {"size": tuple(config.SENSOR_OUTPUT_SIZE)}
                 log.info(
-                    "Forcing full-FoV sensor mode: size=%s crop_limits=%s "
-                    "(ISP downscales to %dx%d)",
-                    mode.get("size"), mode.get("crop_limits"), *self._size,
+                    "Forcing full-FoV sensor mode via raw=%s (ISP downscales to "
+                    "%dx%d, buffer_count=%d)",
+                    tuple(config.SENSOR_OUTPUT_SIZE),
+                    *self._size, config.CAMERA_BUFFER_COUNT,
                 )
 
             cfg = self._picam.create_video_configuration(**cfg_kwargs)
             try:
                 self._picam.configure(cfg)
             except Exception as e:  # pragma: no cover - hardware dependency
-                # A forced sensor mode that the pipeline rejects shouldn't take
-                # the whole camera down — drop the raw stream and retry with
+                # A forced sensor mode the pipeline rejects shouldn't take the
+                # whole camera down — drop the raw stream and retry with
                 # auto-selection so we still get a (possibly cropped) stream.
                 if "raw" in cfg_kwargs:
                     log.warning(

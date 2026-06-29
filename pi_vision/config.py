@@ -48,6 +48,15 @@ JPEG_QUALITY = 70  # 1..100
 # restore the old auto-selected (cropped) behaviour.
 SENSOR_OUTPUT_SIZE = (2328, 1748)  # full-FoV 2x2-binned IMX519 mode; None = auto
 
+# Number of camera buffers libcamera allocates. picamera2 defaults video to 6,
+# but the full-FoV raw stream above is ~5 MB/buffer and 6 of them overflow the
+# Pi Zero's small CMA pool → "Cannot allocate memory" at start. We capture
+# newest-frame-wins on demand, so 3 is plenty (≈3×(5 MB raw + 1.2 MB main) ≈
+# 19 MB). Raise for smoother pacing only if CMA allows; lower if it still OOMs.
+# If even 3 OOMs, increase CMA in /boot/firmware/config.txt instead (see
+# REFLASH.md) — that's the kernel-side contiguous-memory budget, not RAM.
+CAMERA_BUFFER_COUNT = 3
+
 # --- Focus / sharpness -------------------------------------------------------
 # We use the mainline `imx519` dtoverlay, not Arducam's fork, so libcamera has
 # no AF algorithm loaded — LENS_POSITION / AF_MODE are ignored by picamera2.
