@@ -59,6 +59,29 @@ def _lock_focus():
         )
 
 
+def _select_sensor_mode(picam, want_size):
+    """Find the sensor mode whose readout size equals `want_size`.
+
+    libcamera, asked only for a small output size, picks a sensor mode without
+    regard to its crop and can land on a heavily-cropped (narrow-FoV) mode. To
+    force the full-field-of-view mode we look it up explicitly in the sensor's
+    advertised modes and pass it back as the raw stream.
+
+    Returns the matching mode dict from `picam.sensor_modes` (which carries the
+    exact format/bit-depth, not just a size), or None if the sensor doesn't
+    advertise that size — in which case the caller falls back to libcamera's
+    auto-selection rather than failing.
+    """
+    if want_size is None:
+        return None
+    want = (int(want_size[0]), int(want_size[1]))
+    for mode in picam.sensor_modes:
+        size = mode.get("size")
+        if size and (int(size[0]), int(size[1])) == want:
+            return mode
+    return None
+
+
 class Camera:
     def __init__(self, width, height, quality):
         self._size = (int(width), int(height))
@@ -104,15 +127,60 @@ class Camera:
                 # Hard shutter cap — surest motion freeze, but disables auto
                 # brightness adaptation (the AGC can no longer lengthen shutter).
                 cap_controls["ExposureTime"] = config.MAX_EXPOSURE_TIME_US
-            cfg = self._picam.create_video_configuration(
+            cfg_kwargs = dict(
                 main={"size": self._size},
                 transform=Transform(hflip=True, vflip=True),
                 controls=cap_controls,
             )
-            self._picam.configure(cfg)
+            # Force the full-FoV sensor mode (see config.SENSOR_OUTPUT_SIZE).
+            # We add it as the raw stream only if the sensor actually advertises
+            # that mode; otherwise we leave it out and let libcamera auto-select
+            # rather than risk a config that won't apply.
+            mode = _select_sensor_mode(self._picam, config.SENSOR_OUTPUT_SIZE)
+            if config.SENSOR_OUTPUT_SIZE is not None and mode is None:
+                log.warning(
+                    "Requested sensor mode %s not advertised — falling back to "
+                    "auto-selection (FoV may be cropped). Available sizes: %s",
+                    tuple(config.SENSOR_OUTPUT_SIZE),
+                    [m.get("size") for m in self._picam.sensor_modes],
+                )
+            if mode is not None:
+                # Pass the full mode dict (exact size + format + bit depth) so
+                # libcamera pins this mode and can't drop back to a cropped one.
+                cfg_kwargs["raw"] = mode
+                log.info(
+                    "Forcing full-FoV sensor mode: size=%s crop_limits=%s "
+                    "(ISP downscales to %dx%d)",
+                    mode.get("size"), mode.get("crop_limits"), *self._size,
+                )
+
+            cfg = self._picam.create_video_configuration(**cfg_kwargs)
+            try:
+                self._picam.configure(cfg)
+            except Exception as e:  # pragma: no cover - hardware dependency
+                # A forced sensor mode that the pipeline rejects shouldn't take
+                # the whole camera down — drop the raw stream and retry with
+                # auto-selection so we still get a (possibly cropped) stream.
+                if "raw" in cfg_kwargs:
+                    log.warning(
+                        "Configure with forced sensor mode failed (%s) — "
+                        "retrying with auto-selected mode", e,
+                    )
+                    cfg_kwargs.pop("raw")
+                    cfg = self._picam.create_video_configuration(**cfg_kwargs)
+                    self._picam.configure(cfg)
+                else:
+                    raise
             # JPEG quality for capture_file(format="jpeg").
             self._picam.options["quality"] = self._quality
             self._picam.start()
+            # Verify (for the logs) which sensor mode actually took effect, so we
+            # can confirm full FoV on-device rather than assuming it.
+            try:
+                applied_raw = self._picam.camera_configuration().get("raw")
+                log.info("Active raw stream after start: %s", applied_raw)
+            except Exception:  # pragma: no cover - introspection only
+                pass
             # Re-assert focus AFTER start: if picamera2 reset the VCM to its
             # power-on default when it opened the device, this pins it back to
             # our sharp position. Harmless if it was already correct.

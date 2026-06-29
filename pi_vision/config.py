@@ -25,6 +25,29 @@ CAPTURE_WIDTH = 640
 CAPTURE_HEIGHT = 480
 JPEG_QUALITY = 70  # 1..100
 
+# --- Sensor mode / field of view ---------------------------------------------
+# CAPTURE_WIDTH/HEIGHT above is the ISP *output* size (what we JPEG + stream).
+# It is NOT a sensor mode — the IMX519's smallest mode is 1280x720. When you ask
+# libcamera for a small output it picks a sensor mode WITHOUT knowing each mode's
+# crop, and lands on the 1280x720 mode whose crop is only (1048,1042)/2560x1440
+# — i.e. it reads just a ~2560x1440 CENTRE slice of the 4656x3496 array (~55% of
+# the width, ~41% of the height ≈ a 2x zoom-in). For a cane that throws away the
+# peripheral field of view where obstacles first appear.
+#
+# Forcing the full-array binned mode 2328x1748 (crop (0,0)/4656x3496 = the WHOLE
+# sensor, 2x2 binned, 30 fps) restores the full FoV and improves low light (2x2
+# binning sums 4 photosites → less noise), while the ISP still scales the output
+# down to CAPTURE_WIDTH/HEIGHT — so bandwidth and YOLO's 640 input are unchanged.
+# It's also native 4:3, matching 640x480, so there's no extra aspect crop (the
+# old 1280x720 mode is 16:9). We pass this as the raw-stream size; camera.py
+# verifies the mode actually exists on the sensor and falls back to libcamera's
+# auto-selection if not.
+#
+# Tradeoff: a wider FoV packs more scene into 640x480, so distant objects get
+# fewer pixels — validate far-object detection on hardware. Set to None to
+# restore the old auto-selected (cropped) behaviour.
+SENSOR_OUTPUT_SIZE = (2328, 1748)  # full-FoV 2x2-binned IMX519 mode; None = auto
+
 # --- Focus / sharpness -------------------------------------------------------
 # We use the mainline `imx519` dtoverlay, not Arducam's fork, so libcamera has
 # no AF algorithm loaded — LENS_POSITION / AF_MODE are ignored by picamera2.
