@@ -136,6 +136,21 @@ RECONNECT_BACKOFF_MAX = 5.0
 SEND_TIMEOUT_S = 5.0
 CONNECT_TIMEOUT_S = 5.0
 
+# TCP keepalive (seconds / count). Without it, a silently-vanished phone (WiFi
+# drop with no RST) is only detected when the send buffer fills — the sonar's
+# tiny lines (~40 B/s) would take ~25 MINUTES to fill it, during which the Pi
+# happily "sends" into the void and never redials the recovered phone. With
+# these values a dead peer is detected in ~ IDLE + INTVL×CNT ≈ 14 s.
+KEEPALIVE_IDLE_S = 5
+KEEPALIVE_INTERVAL_S = 3
+KEEPALIVE_COUNT = 3
+
+# How often the camera sender logs SoC temperature + throttle/under-voltage
+# flags (`vcgencmd`). Under-voltage is the classic power-bank failure mode and
+# throttling silently halves the frame rate — both must be visible in
+# `journalctl` (and both feed the thesis power/thermal section). 0 disables.
+HEALTH_LOG_INTERVAL_S = 30
+
 # ── Sonar (HC-SR04 distance over WiFi) ───────────────────────────────────────
 # A separate, tiny text stream that REPLACES the ESP32 ultrasonic path. The Pi
 # reads the HC-SR04 and pushes newline-delimited centimetre readings to the
@@ -181,3 +196,10 @@ SONAR_ECHO_TIMEOUT_S = 0.04
 # this long with a tight busy-wait; a bit longer is harmless since only the ECHO
 # timing (measured from kernel callback timestamps) affects the distance.
 SONAR_TRIGGER_PULSE_US = 10
+
+# How many CONSECUTIVE failed pings (no echo pulse at all — dead sensor, or a
+# clone holding ECHO high after a missed echo) before we report the NO_READING
+# fault sentinel instead of holding the last median. One or two misses are
+# routine on a swinging cane and must not cancel an active alarm on the phone;
+# 3 @ 5 Hz ≈ 0.6 s of true silence before we admit the sensor is gone.
+SONAR_FAULT_AFTER_MISSES = 3

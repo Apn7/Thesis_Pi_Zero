@@ -15,11 +15,29 @@ import struct
 from config import (
     CONNECT_TIMEOUT_S,
     HEADER_FORMAT,
+    KEEPALIVE_COUNT,
+    KEEPALIVE_IDLE_S,
+    KEEPALIVE_INTERVAL_S,
     MAX_FRAME_BYTES,
     SEND_TIMEOUT_S,
 )
 
 log = logging.getLogger("pi_vision.sender")
+
+
+def enable_keepalive(sock):
+    """Arm TCP keepalive so a silently-vanished peer (WiFi drop, no RST) is
+    detected in ~15 s instead of whenever the send buffer happens to fill.
+    Best-effort: the per-parameter options are Linux-specific."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, KEEPALIVE_IDLE_S)
+        sock.setsockopt(
+            socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, KEEPALIVE_INTERVAL_S
+        )
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, KEEPALIVE_COUNT)
+    except (OSError, AttributeError) as e:
+        log.debug("keepalive tuning unavailable: %s", e)
 
 
 class FrameSender:
@@ -45,6 +63,7 @@ class FrameSender:
         # Detect a silently-dropped peer (phone left WiFi) rather than blocking
         # forever; also bound each send.
         sock.settimeout(SEND_TIMEOUT_S)
+        enable_keepalive(sock)
         self._sock = sock
         log.info("Connected to %s:%d", self._host, self._port)
 

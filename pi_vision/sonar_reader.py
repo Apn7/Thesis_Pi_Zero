@@ -14,12 +14,20 @@
 **Robustness:**
   * Each call pings once; we keep a short rolling window and return the MEDIAN
     to reject the odd outlier without much lag.
-  * No-echo handling distinguishes two cases:
-      - echo started but never returned in time → out of range → report the max
-        distance (the phone reads that as a clear path / SAFE);
-      - echo never even started (no rising edge) → sensor not responding →
-        emit the ESP32-style NO_READING sentinel (-1) so the phone shows
-        no-data rather than a false "clear path".
+  * Out-of-range pings (echo went out, nothing reflected) feed the max distance
+    INTO the median window rather than bypassing it: on a swinging cane a
+    single missed echo is routine, and reporting max instantly would flip the
+    phone's verdict to SAFE mid-alarm (cancelling vibration + speech) for one
+    bad ping. Through the median, a lone miss is outvoted; a genuinely clear
+    path still reads max within ~3 pings (~0.6 s).
+  * A no-response ping (no rising edge — sensor dead, or a clone holding ECHO
+    high after a missed echo, a documented clone quirk) is tolerated
+    transiently: we return the current median for the first few misses and
+    emit the ESP32-style NO_READING sentinel (-1) only after
+    `SONAR_FAULT_AFTER_MISSES` consecutive failures — a real fault signal, not
+    a hiccup. The phone additionally has its own staleness watchdog.
+  * Before each trigger we check ECHO is actually low; triggering while a
+    hung clone still holds it high would corrupt the measurement.
 
 Wiring: TRIG → GPIO23 direct, ECHO → 4.5 kΩ series → GPIO24, VCC 5V, GND GND.
 No daemon required; the user just needs to be in the `gpio` group (default).
@@ -84,6 +92,7 @@ class Sonar:
         self._rise_ns = None
         self._echo_us = None
         self._samples = deque(maxlen=window)
+        self._consecutive_misses = 0
 
     def start(self):
         """Open the gpiochip and arm the echo callback. Raises SonarError."""
@@ -131,6 +140,16 @@ class Sonar:
 
     def _ping(self):
         """One measurement → cm (float), _OUT_OF_RANGE, or None (no response)."""
+        # Some HC-SR04 clones hold ECHO high (~150-240 ms, sometimes until
+        # re-trigger) after a missed echo. Triggering while ECHO is still high
+        # corrupts the measurement — treat it as a no-response ping instead
+        # and let the next cycle retry once the line has released.
+        try:
+            if self._lgpio.gpio_read(self._h, self._echo) == 1:
+                return None
+        except Exception:
+            pass  # a read failure shouldn't stop us from trying the ping
+
         self._echo_us = None
         self._rise_ns = None
         # 10 µs trigger pulse (a bit longer is harmless — only ECHO timing,
@@ -155,15 +174,32 @@ class Sonar:
         return cm
 
     def read_cm(self):
-        """Return distance in cm, max-range on a clear path, or NO_READING."""
+        """Return the median distance in cm (max-range = clear path), or
+        NO_READING after several consecutive failed pings (sensor fault)."""
         if self._h is None:
             raise SonarError("Sonar not started")
         result = self._ping()
+
         if result is None:
-            return NO_READING  # sensor not responding
-        if result is _OUT_OF_RANGE:
-            return self._max_cm  # clear path → SAFE on the phone
-        self._samples.append(result)
+            # No response at all. One miss is a hiccup (clone quirk, EMI) —
+            # hold the last known picture; several in a row is a real fault
+            # the phone must hear about (it must never trust silence).
+            self._consecutive_misses += 1
+            if self._consecutive_misses >= config.SONAR_FAULT_AFTER_MISSES:
+                self._samples.clear()  # stale data must not outlive the fault
+                return NO_READING
+            if self._samples:
+                ordered = sorted(self._samples)
+                return ordered[len(ordered) // 2]
+            return NO_READING
+        self._consecutive_misses = 0
+
+        # Out-of-range is a legitimate "nothing within 4 m" measurement — feed
+        # it through the median like any other sample. Bypassing the filter
+        # here would let a single missed echo flip the phone to SAFE mid-alarm.
+        self._samples.append(
+            self._max_cm if result is _OUT_OF_RANGE else result
+        )
         ordered = sorted(self._samples)
         return ordered[len(ordered) // 2]  # median rejects outliers
 

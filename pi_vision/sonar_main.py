@@ -75,6 +75,11 @@ def resolve_host(args):
 
 def run(args, host):
     """Main read→send loop with reconnect/backoff. Returns an exit code."""
+    # Host came from gateway auto-detection (no --host): allow re-detection if
+    # the connection keeps failing — the Pi may have re-associated to a
+    # different network, making the remembered gateway stale forever.
+    host_is_auto = args.host is None
+
     sonar = Sonar(max_distance_m=args.max_distance)
     try:
         sonar.start()
@@ -100,6 +105,14 @@ def run(args, host):
                     )
                     _interruptible_sleep(backoff)
                     backoff = min(backoff * 2, config.RECONNECT_BACKOFF_MAX)
+                    # The gateway may have changed (new hotspot / re-associated
+                    # WiFi) — re-detect once we're at max backoff.
+                    if host_is_auto and backoff >= config.RECONNECT_BACKOFF_MAX:
+                        fresh = detect_gateway()
+                        if fresh and fresh != host:
+                            log.info("Gateway changed %s → %s", host, fresh)
+                            host = fresh
+                            sender = SonarSender(host, args.port)
                     continue
 
             # 2) Read one distance and push it.

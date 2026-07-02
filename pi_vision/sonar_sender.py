@@ -16,6 +16,7 @@ import logging
 import socket
 
 from config import CONNECT_TIMEOUT_S, SEND_TIMEOUT_S
+from frame_sender import enable_keepalive
 
 log = logging.getLogger("pi_vision.sonar_sender")
 
@@ -40,6 +41,9 @@ class SonarSender:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         # Detect a silently-dropped peer (phone left WiFi) and bound each send.
         sock.settimeout(SEND_TIMEOUT_S)
+        # Keepalive matters MOST here: at ~40 B/s these lines would take ~25
+        # minutes to fill the send buffer and surface a dead peer otherwise.
+        enable_keepalive(sock)
         self._sock = sock
         log.info("Connected to %s:%d", self._host, self._port)
 

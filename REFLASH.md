@@ -180,7 +180,7 @@ cd /home/apn7/Thesis_Pi_Zero/pi_vision
 python3 sonar_main.py            # auto-detects phone as default gateway (hotspot)
 # or on shared WiFi:  python3 sonar_main.py --host <PHONE_IP>
 ```
-Expect `HC-SR04 ready via pigpio…` then `Connected to <phone>:8766`. Wave your
+Expect `HC-SR04 ready via lgpio…` then `Connected to <phone>:8766`. Wave your
 hand in front of the sensor — the phone's distance card should react and show the
 verdict change. `Ctrl+C` to stop.
 

@@ -10,9 +10,9 @@
 #
 # --- INSTALL (run on the Pi, once) ---
 #   1. Edit User= and WorkingDirectory=/ExecStart= below to match YOUR Pi.
-#   2. (Recommended) steadier readings via pigpio:
-#        sudo apt install python3-gpiozero python3-pigpio
-#        sudo systemctl enable --now pigpiod
+#   2. GPIO library (the reader uses lgpio — native on Bookworm, no daemon;
+#      pigpio is NOT used and is no longer in Bookworm's repos):
+#        sudo apt install -y python3-lgpio
 #   3. sudo cp pi_vision/pi-sonar.service /etc/systemd/system/pi-sonar.service
 #   4. sudo systemctl daemon-reload
 #   5. sudo systemctl enable --now pi-sonar.service   # start now + on every boot
@@ -40,9 +40,13 @@ User=apn7
 WorkingDirectory=/home/apn7/Thesis_Pi_Zero/pi_vision
 ExecStart=/usr/bin/python3 /home/apn7/Thesis_Pi_Zero/pi_vision/sonar_main.py
 
-# If sonar_main.py exits (sensor error, etc.) or the link drops hard, restart it.
-Restart=on-failure
+# Assistive device: the sender must ALWAYS come back, even after a clean-but-
+# unexpected exit. `systemctl stop` still stops it (manual stops don't restart).
+Restart=always
 RestartSec=3
+# Never give up: the default rate limit (5 starts/10 s) would permanently fail
+# the unit during a long "waiting for hotspot" boot loop.
+StartLimitIntervalSec=0
 
 # Send Python logs straight to the journal (journalctl) without buffering.
 Environment=PYTHONUNBUFFERED=1

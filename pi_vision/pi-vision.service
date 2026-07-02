@@ -33,9 +33,14 @@ User=apn7
 WorkingDirectory=/home/apn7/Thesis_Pi_Zero/pi_vision
 ExecStart=/usr/bin/python3 /home/apn7/Thesis_Pi_Zero/pi_vision/main.py
 
-# If main.py exits (camera error, etc.) or the link drops hard, restart it.
-Restart=on-failure
+# Assistive device: the sender must ALWAYS come back, even after a clean-but-
+# unexpected exit (Restart=on-failure would leave a rc=0 exit dead forever).
+# `systemctl stop` still stops it — systemd never restarts a manual stop.
+Restart=always
 RestartSec=3
+# Never give up: the default rate limit (5 starts/10 s) would permanently fail
+# the unit during a long "waiting for hotspot" boot loop.
+StartLimitIntervalSec=0
 
 # Send Python logs straight to the journal (journalctl) without buffering.
 Environment=PYTHONUNBUFFERED=1
