@@ -1,0 +1,31 @@
+# systemd unit: bring up the Pi's own AP when no known WiFi appears at boot.
+#
+# Runs wifi_fallback.sh once per boot: waits ~25 s for NetworkManager to
+# autoconnect a known client profile (the dev phone-hotspot keeps priority);
+# if none appears, raises the `smartcane-ap` profile so the app on ANY phone
+# can join the cane directly (WifiNetworkSpecifier). The frame/sonar senders
+# don't need ordering against this — they wait for a phone on their own.
+#
+# --- INSTALL (run on the Pi, once) ---
+#   0. Create the AP profile + chmod the script (see wifi_fallback.sh header).
+#   1. Edit ExecStart= below if your path differs.
+#   2. sudo cp pi_vision/pi-wifi-fallback.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable pi-wifi-fallback.service   # runs on every boot
+#      (start it now too if you want AP mode without rebooting:
+#       sudo systemctl start pi-wifi-fallback.service)
+#   5. journalctl -u pi-wifi-fallback.service -b        # check its decision
+
+[Unit]
+Description=Smart Cane - fall back to own AP when no known WiFi appears
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/apn7/Thesis_Pi_Zero/pi_vision/wifi_fallback.sh 25
+# oneshot + no Restart: the decision is made once per boot. Re-run manually
+# (systemctl start) if you power the dev hotspot down and want AP mode.
+
+[Install]
+WantedBy=multi-user.target

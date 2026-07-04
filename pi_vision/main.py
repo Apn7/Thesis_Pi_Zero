@@ -5,13 +5,15 @@ Step 1 of PI_ZERO_VISION_PLAN.md (data path, no BLE yet). The phone runs the
 TCP server (`PiFrameServer`); this dials it and pushes length-prefixed JPEGs.
 
 Usage:
-    python3 main.py                 # auto-detect the phone (default gateway)
+    python3 main.py                 # auto-detect the phone (both WiFi modes)
     python3 main.py --host 192.168.1.50
     python3 main.py --host 192.168.43.1 --port 8765 --width 640 --height 480
 
-On a phone hotspot the phone is the Pi's default gateway, so `--host` can be
-omitted. On a shared home WiFi (handy for early testing) the gateway is the
-router, not the phone, so pass the phone's IP with `--host`.
+Auto-detection handles both topologies: on the phone's hotspot (dev) the
+phone is the default gateway; when the Pi hosts `smartcane-ap` (production)
+the phone is the associated DHCP client. With no phone present we wait —
+that's the normal boot state, not an error. On a shared home WiFi (early
+testing) pass the phone's IP with `--host`.
 """
 
 import argparse
@@ -24,7 +26,7 @@ import time
 import config
 from camera import Camera, CameraError
 from frame_sender import FrameSender
-from gateway import detect_gateway
+from gateway import detect_phone
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,16 +57,26 @@ def parse_args():
 
 
 def resolve_host(args):
+    """Explicit --host wins; otherwise wait until a phone appears.
+
+    With the Pi as its own AP the service boots before any phone has joined,
+    so "no phone yet" is the normal startup state — we poll instead of
+    exiting (exiting would make systemd crash-loop through camera init).
+    Returns None only if interrupted by a shutdown signal.
+    """
     if args.host:
         return args.host
-    gw = detect_gateway()
-    if gw:
-        log.info("Auto-detected phone (default gateway): %s", gw)
-        return gw
-    log.error(
-        "No --host given and no default gateway found. Connect to the phone's "
-        "hotspot first, or pass --host <phone-ip>."
-    )
+    logged = False
+    while _running:
+        phone = detect_phone()
+        if phone:
+            return phone
+        if not logged:
+            log.info(
+                "No phone yet (no hotspot gateway, no AP client) — waiting..."
+            )
+            logged = True
+        _interruptible_sleep(2.0)
     return None
 
 
@@ -147,12 +159,12 @@ def run(args, host):
                     )
                     _interruptible_sleep(backoff)
                     backoff = min(backoff * 2, config.RECONNECT_BACKOFF_MAX)
-                    # The gateway may have changed (new hotspot / re-associated
-                    # WiFi) — re-detect once we're at max backoff.
+                    # The phone may have moved (new hotspot / fresh DHCP lease
+                    # on our AP) — re-detect once we're at max backoff.
                     if host_is_auto and backoff >= config.RECONNECT_BACKOFF_MAX:
-                        fresh = detect_gateway()
+                        fresh = detect_phone()
                         if fresh and fresh != host:
-                            log.info("Gateway changed %s → %s", host, fresh)
+                            log.info("Phone moved %s → %s", host, fresh)
                             host = fresh
                             sender = FrameSender(host, args.port)
                     continue
@@ -201,7 +213,7 @@ def main():
     args = parse_args()
     host = resolve_host(args)
     if not host:
-        return 1
+        return 0  # interrupted while waiting for a phone — clean shutdown
     return run(args, host)
 
 
