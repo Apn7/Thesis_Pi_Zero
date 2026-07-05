@@ -78,14 +78,77 @@ The old plan (Path A: app creates a `LocalOnlyHotspot`, sends creds to the Pi ov
 sudo nmcli connection add type wifi ifname wlan0 con-name smartcane-ap \
   autoconnect no ssid SmartCane-Cam mode ap \
   802-11-wireless.band bg 802-11-wireless.channel 6 \
+  802-11-wireless.powersave 2 \
   wifi-sec.key-mgmt wpa-psk wifi-sec.psk smartcane123 \
   ipv4.method shared ipv6.method disabled
+sudo raspi-config nonint do_wifi_country BD   # full TX power (world domain throttles)
 chmod +x ~/Thesis_Pi_Zero/pi_vision/wifi_fallback.sh
 sudo cp ~/Thesis_Pi_Zero/pi_vision/pi-wifi-fallback.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable pi-wifi-fallback.service
 # re-enable the senders if still stopped from the spike:
 sudo systemctl enable --now pi-vision.service pi-sonar.service
 ```
+
+(`powersave 2` = disable — brcmfmac power management is the classic cause of a
+Pi AP missing the phone's probe requests, i.e. the phone scanning and simply
+not hearing the cane. `wifi_fallback.sh` also re-asserts both idempotently and
+forces `iw ... set power_save off` after the AP is up.)
+
+---
+
+## Home-WiFi contention — why the cane didn't always win, and the fix (2026-07-05)
+
+**Symptom:** phone already on home WiFi + app open → the cane join sat in
+`requesting` forever; the Pi AP never "replaced" the home WiFi. First-ever join
+(with its dialog) worked; the *silent* re-join path did not.
+
+**Root cause (AOSP, verified in the Android 13 source):** the platform only
+evaluates a specifier request when it is **freshly filed**, and on Android 12/13
+`WifiNetworkFactory` **revokes the remembered silent approval** whenever the
+phone is associated to another WiFi and the radio can't host a second station
+interface — verbatim comment: *"we want to escalate and display the dialog to
+the user EVEN if we have a normal bypass."* On top of that, the platform's 10 s
+request scans stop while the screen is off, and OEM builds (ColorOS) can wedge a
+long-lived unfulfilled request. The app used to file the request **once** and
+wait — so when the OS decided a new consent was needed, nobody ever asked again.
+
+**App fix (built + `flutter analyze`/Kotlin compile clean):**
+- `PiWifiService` now runs a **stuck-join watchdog**: while state stays
+  `requesting`, every `AppConstants.piWifiRefileSeconds` (45 s) it **re-files
+  the request natively** (`refreshNetwork` in `MainActivity.kt` — drop +
+  fresh register, no-op when connected). Each re-file restarts the platform's
+  periodic scans with an immediate sweep and forces a fresh
+  connect-or-consent decision — the cane keeps contesting the radio instead
+  of waiting forever. The watchdog never runs before the first pairing (it
+  would dismiss the consent dialog mid-guidance).
+- New natives: `getCurrentWifiSsid` (who is hogging the radio) and
+  `isLocalOnlyStaSupported` (dual-STA capable phones join the cane *without*
+  leaving home WiFi and keep the silent bypass — diagnostic).
+- `home_screen.dart` speaks a one-shot Bangla nudge when the watchdog reports
+  the phone parked on another WiFi: the consent window will appear — pick
+  SmartCane-Cam, press Connect.
+- Scan nudger now fires its first kick at 3 s (was 25 s).
+
+**Pi fix (louder, more stubborn AP):** `wifi_fallback.sh` now disables WiFi
+power save (NM property + `iw ... power_save off`), sets the regulatory domain,
+and supports two "AP wins" knobs (documented in `pi-wifi-fallback.service`):
+- `wifi_fallback.sh 0` → raise the AP **unconditionally** (defense/demo mode).
+- `PRIORITY_CONS="<dev-hotspot-profile>"` → only the dev hotspot may keep
+  client mode; if the Pi latched onto any other known WiFi (e.g. the home
+  router — which previously meant **no AP existed at all** for the app to
+  find), that connection is dropped and the AP raised.
+
+**Defense-day preflight (run once the evening before):**
+1. Pin the Pi: `sudo systemctl edit pi-wifi-fallback.service` → override
+   `ExecStart=` with `... wifi_fallback.sh 0` (AP always), reboot, confirm
+   `journalctl -u pi-wifi-fallback.service -b` says the AP is up.
+2. Phone check while it sits on home/campus WiFi: open the app → within ~45 s
+   either it joins silently (dual-STA phones) or the consent window
+   re-appears → tap Connect (remember the ColorOS chooser: pick **"Settings"**,
+   never "Wireless Settings").
+3. If anything is odd, watch the decision live:
+   `adb logcat | grep -Ei "WifiNetworkFactory|PiWifiService"` and check
+   dual-STA support: `adb shell dumpsys wifi | grep -i concurrency`.
 
 Safety rails already in place: **USB-gadget Ethernet SSH** (used throughout the spike) is
 hotspot-independent; in AP mode you can also SSH by joining `SmartCane-Cam` from the PC

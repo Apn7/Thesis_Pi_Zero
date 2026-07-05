@@ -6,6 +6,14 @@
 # can join the cane directly (WifiNetworkSpecifier). The frame/sonar senders
 # don't need ordering against this — they wait for a phone on their own.
 #
+# Two knobs for making the AP win (see wifi_fallback.sh header):
+#   * Demo/defense mode — AP unconditionally, never client mode:
+#       ExecStart=... /wifi_fallback.sh 0
+#   * Only the dev hotspot may keep client mode; any OTHER known WiFi the
+#     Pi latched onto (e.g. the home router) is dropped in favor of the AP:
+#       Environment=PRIORITY_CONS=<dev-hotspot-profile-name>
+#     (profile names: `nmcli connection show`)
+#
 # --- INSTALL (run on the Pi, once) ---
 #   0. Create the AP profile + chmod the script (see wifi_fallback.sh header).
 #   1. Edit ExecStart= below if your path differs.
