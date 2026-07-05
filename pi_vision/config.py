@@ -23,7 +23,11 @@ MAX_FRAME_BYTES = 4 * 1024 * 1024  # 4 MB
 # this is a bandwidth/latency knob, not an accuracy one.
 CAPTURE_WIDTH = 640
 CAPTURE_HEIGHT = 480
-JPEG_QUALITY = 70  # 1..100
+# 60 (was 70): ~25% fewer bytes per frame for a JPEG-artifact level YOLO
+# doesn't care about. On the Pi-AP link airtime is the scarcest resource —
+# every byte not sent is RF margin the weak brcmfmac radio gets back, and
+# less margin pressure = fewer send stalls = fewer visible "drops".
+JPEG_QUALITY = 60  # 1..100
 
 # --- Sensor mode / field of view ---------------------------------------------
 # CAPTURE_WIDTH/HEIGHT above is the ISP *output* size (what we JPEG + stream).
@@ -126,14 +130,26 @@ MAX_EXPOSURE_TIME_US = None  # hard cap made frames DARK (it disables AE → gai
 
 # Optional cap so we don't spin faster than useful. None = uncapped (the
 # blocking send naturally paces capture to the link speed).
-MAX_FPS = 15
+# 10 (was 15): the phone's YOLO.predict consumes ~8-9 fps, so frames above
+# ~10 fps are *discarded* by newest-frame-wins after burning airtime the
+# Pi-AP radio badly needs. Capping at 10 loses zero processed frames and
+# cuts RF load by a third — the cheapest stability win available.
+MAX_FPS = 10
 
 # Reconnect backoff (seconds): start small, grow to a ceiling.
 RECONNECT_BACKOFF_START = 0.5
 RECONNECT_BACKOFF_MAX = 5.0
 
 # Per-frame send timeout; a stalled phone shouldn't wedge the sender forever.
-SEND_TIMEOUT_S = 5.0
+# 10 s (was 5): a phone STA's radio legitimately stalls for 1-6 s (power-save
+# wake cadence, OEM background scans going off-channel, RF retry bursts on a
+# thin link). At 5 s those stalls crossed the threshold and got AMPLIFIED
+# into full sever+redial cycles — the app-visible "sudden drops". At 10 s the
+# link rides out a stall as a brief freeze and self-heals; TCP retransmission
+# keeps the stalled frame flowing the instant the radio wakes. A genuinely
+# vanished peer still surfaces in ~10 s + redial, and the app's persistent
+# WifiNetworkSpecifier request re-joins on its own regardless.
+SEND_TIMEOUT_S = 10.0
 CONNECT_TIMEOUT_S = 5.0
 
 # TCP keepalive (seconds / count). Without it, a silently-vanished phone (WiFi

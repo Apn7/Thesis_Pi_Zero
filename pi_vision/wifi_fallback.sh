@@ -87,4 +87,13 @@ iw dev wlan0 set power_save off 2>/dev/null || true
 # domain above is the real lever; this just catches drivers that honor it).
 iw dev wlan0 set txpower auto 2>/dev/null || true
 
-echo "smartcane-ap is up (powersave off, reg domain set)."
+# CRITICAL for AP stability: stop NM autoconnect-hunting on wlan0 while the
+# AP serves. The saved client profiles (dev hotspot etc.) have autoconnect on,
+# and NM's periodic hunt for them (a) triggers scans that yank the single
+# radio OFF-CHANNEL — beacons go silent for hundreds of ms and clients drop —
+# and (b) can outright tear the AP down to chase a hotspot that appears
+# mid-session. Device-level runtime flag: clears on reboot, so the next boot's
+# fallback decision (dev hotspot priority) is completely unaffected.
+nmcli device set wlan0 autoconnect no 2>/dev/null || true
+
+echo "smartcane-ap is up (powersave off, reg domain set, autoconnect-hunt off)."

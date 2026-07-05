@@ -138,6 +138,71 @@ and supports two "AP wins" knobs (documented in `pi-wifi-fallback.service`):
   router — which previously meant **no AP existed at all** for the app to
   find), that connection is dropped and the AP raised.
 
+### Link *stability* fix — the sequel bug (2026-07-05, same day)
+
+After the contention fix above landed, the AP link connected and persisted but
+**stuttered**: sudden latency spikes and random drops that the old hotspot/debug
+path never showed. Two stacked causes, both now fixed:
+
+1. **Phone-side Wi-Fi power-save (the big one).** In debug mode the *phone* is
+   the hotspot/AP, so its radio never power-saves. In production the phone is a
+   **client (STA)** of the Pi's AP, and Android throttles the STA radio to "low
+   performance mode" when the app backgrounds / screen is off (pocketed cane) —
+   textbook cause of "latency jumps suddenly, then recovers." Fix: the app now
+   holds a **`WifiManager.WifiLock(WIFI_MODE_FULL_HIGH_PERF)`** (in
+   `MainActivity.kt`) the whole time the cane link is up — acquired on
+   `onAvailable`, released only on true teardown, held through brief blips so
+   re-association is fast. HIGH_PERF, not LOW_LATENCY: LOW_LATENCY only engages
+   foreground + screen-on, which a pocketed cane never is.
+2. **My own re-file watchdog, thrashing a live link.** On a marginally flaky AP
+   the watchdog's hard drop-and-re-register (needed to *win* the initial
+   connection) was firing during recovery and turning a self-healing blip into
+   a down/up storm. Fix: `PiWifiService` now splits into an **acquisition phase**
+   (never connected yet → watchdog allowed to fight home WiFi) and a
+   **maintenance phase** (`_hasConnectedOnce` → watchdog permanently disarmed;
+   on loss we do nothing but mirror UI state and let the OS's persistent request
+   + the WifiLock re-heal the link). Re-filing never again disturbs a live link.
+
+Net: initial acquisition is still aggressive enough to beat home WiFi; once
+connected the app goes quiet and the radio is pinned to full power. Both builds
+verified clean (`flutter analyze`, `:app:compileDebugKotlin`).
+
+**Pi-side note:** the Pi Zero 2 W's brcmfmac AP is genuinely weaker than a phone
+hotspot for sustained JPEG throughput. `wifi_fallback.sh` already disables AP
+power-save; if frames still choke, drop the JPEG quality/resolution in
+`pi_vision/config.py` before blaming the phone — the WifiLock fix addresses the
+phone half, this is the Pi half.
+
+### Round 2 stability hardening (2026-07-06) — drops persisted in open air
+
+Hardware was cleared on-device (load 0.26, `throttled=0x0`, 54 °C, no swap), but
+station dump showed **3–6% tx failed** → the link's RF margin is thin, and brief
+phone-radio stalls (power-save wake cadence, OEM off-channel scans) were being
+**amplified into visible drops** by an over-strict Pi timeout. Three Pi-side
+changes (no app changes):
+
+1. **`SEND_TIMEOUT_S` 5 → 10 s** (`config.py`) — a 1–6 s radio stall now rides
+   out as a brief freeze + TCP retransmit instead of a sever+redial cycle the
+   app shows as a disconnect.
+2. **`MAX_FPS` 15 → 10, `JPEG_QUALITY` 70 → 60** (`config.py`) — the phone's
+   `YOLO.predict` consumes ~8–9 fps, so >10 fps was pure wasted airtime on the
+   radio's scarcest resource; q60 cuts ~25% bytes/frame. Zero processed-frame
+   loss, roughly a third less RF load → fewer stalls to begin with.
+3. **`nmcli device set wlan0 autoconnect no` after AP-up** (`wifi_fallback.sh`)
+   — stops NM autoconnect-hunting for the saved client profiles while the AP
+   serves: those hunts scan OFF-CHANNEL (beacons go silent → clients drop) and
+   can even tear the AP down to chase a hotspot appearing mid-session. Runtime
+   flag, clears on reboot → boot-time dev-hotspot priority unaffected.
+
+Also verify the phone is actually running the **WifiLock APK** (the fix from the
+stability section above only exists after a rebuild+reinstall):
+`adb shell dumpsys wifi | grep -A3 WifiLock` while streaming should list
+`SmartCane:PiLink`. If a drop still occurs, catch the culprit in the act:
+Pi: `sudo journalctl -f | grep -Ei 'wpa_supplicant|NetworkManager'` (look for
+`AP-STA-DISCONNECTED` and what immediately precedes it); phone:
+`adb logcat | grep -Ei 'WifiNetworkFactory|ClientModeImpl'` (look for the
+disconnect reason code).
+
 **Defense-day preflight (run once the evening before):**
 1. Pin the Pi: `sudo systemctl edit pi-wifi-fallback.service` → override
    `ExecStart=` with `... wifi_fallback.sh 0` (AP always), reboot, confirm
