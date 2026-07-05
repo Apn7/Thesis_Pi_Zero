@@ -203,3 +203,53 @@ SONAR_TRIGGER_PULSE_US = 10
 # routine on a swinging cane and must not cancel an active alarm on the phone;
 # 3 @ 5 Hz ≈ 0.6 s of true silence before we admit the sensor is gone.
 SONAR_FAULT_AFTER_MISSES = 3
+
+# ── Cane-local verdict thresholds (cm) ───────────────────────────────────────
+# MUST mirror the app: `constants.dart` espCriticalCm/espWarningCm/espCautionCm
+# and verdictHysteresisCm, applied by `distance_alert_source.dart`. The Pi
+# classifies the SAME median value it sends to the phone, so identical
+# thresholds + identical hysteresis means the cane's buzzer/vibration and the
+# phone's alerts can never disagree while both are alive. Change one side,
+# change the other — this duplication is deliberate (the cane must classify
+# with the phone absent), but drift between them is a bug.
+OBSTACLE_CRITICAL_CM = 50.0   # == AppConstants.espCriticalCm
+OBSTACLE_WARNING_CM = 100.0   # == AppConstants.espWarningCm
+OBSTACLE_CAUTION_CM = 200.0   # == AppConstants.espCautionCm
+
+# De-escalation hysteresis: escalation is instant; relaxing to a lower verdict
+# requires clearing the previous boundary by this margin (leave CRITICAL at
+# ≥ 60 cm, not 50). Kills alarm chatter when the cane swings at a boundary.
+VERDICT_HYSTERESIS_CM = 10.0  # == AppConstants.verdictHysteresisCm
+
+# Pattern-engine tick (s). 10 ms resolution against a shortest pattern segment
+# of 80 ms — fine-grained enough that rhythms feel crisp, coarse enough that
+# the Python loop is negligible load on the Zero 2 W.
+FEEDBACK_TICK_S = 0.01
+
+# ── Cane-local feedback (active buzzer + vibration motor) ────────────────────
+# Wiring, bring-up and the full rationale live in BUZZER_VIBRATION_WIRING.md.
+# The pin choices are load-bearing, not arbitrary: at power-on the SoC pulls
+# GPIO0-8 UP and GPIO9-27 DOWN, so the ACTIVE-LOW buzzer must sit in the
+# pull-up group (silent through boot) and the ACTIVE-HIGH motor in the
+# pull-down group (off through boot). Swapping them makes the buzzer scream
+# for the entire ~30 s boot.
+#
+# MH-FMD buzzer, LOW-level trigger (S8550 PNP high-side switch). Its VCC must
+# be on 3V3 — at 5 V a 3.3 V GPIO high can no longer fully turn the PNP off
+# and the buzzer whines forever (see the wiring doc, Rule 1).
+#
+# CONFIRMED PASSIVE (2026-07-05 field test): despite shipping under the same
+# "MH-FMD, low-level-trigger" labeling as the active variant, this unit's
+# piezo element has no internal oscillator — driving I/O to a static LOW just
+# clicks once (the transient charge pulse) instead of sounding continuously.
+# It must be driven with a continuous PWM square wave (BUZZER_TONE_HZ) through
+# the PNP, not a static level. A static LOW still means "buzzer path
+# energised"; PWM is what makes that energised path actually produce sound.
+BUZZER_GPIO = 5   # physical pin 29; boot pull-UP keeps it silent
+BUZZER_TONE_HZ = 2700   # audible passive-piezo drive frequency; not a spec
+                        # value — just a clearly-audible tone, tune by ear
+
+# KS0450-class vibration motor module, HIGH-level trigger (SI2302 N-MOSFET
+# low-side switch, logic-level — fine from a 3.3 V GPIO). drive HIGH = vibrate;
+# PWM on this pin scales intensity. VCC on 3V3 (5 V upgrade path in the doc).
+MOTOR_GPIO = 13   # physical pin 33; boot pull-DOWN keeps it off

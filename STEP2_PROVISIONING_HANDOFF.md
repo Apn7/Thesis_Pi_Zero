@@ -39,17 +39,22 @@ The old plan (Path A: app creates a `LocalOnlyHotspot`, sends creds to the Pi ov
 ## What's built (code, both sides)
 
 ### App (`Test_app/test_app_1/`)
-- **`MainActivity.kt`** — `pi_wifi` MethodChannel: `requestNetwork` (WifiNetworkSpecifier +
-  `requestNetwork` with 60 s timeout, INTERNET capability stripped, never binds the
-  process), `releaseNetwork`, `isWifiEnabled`, `onPiWifiLost` push to Dart.
-  Manifest adds `CHANGE_NETWORK_STATE` + `ACCESS_WIFI_STATE` (both normal/auto-granted).
+- **`MainActivity.kt`** — `pi_wifi` MethodChannel: `requestNetwork` registers a
+  **PERSISTENT** WifiNetworkSpecifier request (no timeout; INTERNET capability stripped;
+  never binds the process) and pushes `onPiWifiAvailable`/`Unavailable`(=user declined)/
+  `Lost` events to Dart; `releaseNetwork`, `isWifiEnabled`, `nudgeScan` (best-effort
+  `startScan`). Manifest adds `CHANGE_NETWORK_STATE` + `ACCESS_WIFI_STATE` (normal perms).
 - **`lib/services/pi_wifi_service.dart`** — states idle/requesting/connected/lost/failed/
-  wifiOff; `connect()`/`release()`; **auto-join maintainer** (`enableAutoJoin()`):
-  connect on start, reconnect 2 s after loss, 5→60 s backoff while the cane is off,
-  polls the WiFi toggle and surfaces `wifiOff` as a distinct state.
+  wifiOff; **auto-join maintainer** around the persistent request: register at start, the
+  OS then joins whenever the cane's AP appears (app-before-cane "just works"); 25 s scan
+  nudger while searching; re-register 2 s after loss; 60 s retry after a decline (no
+  dialog spam); WiFi-toggle-off surfaced as `wifiOff`. Persists `pi_wifi_paired_once`
+  (shared_preferences) after the first successful join.
 - **`home_screen.dart`** — enables auto-join alongside fusion/foreground-service startup
-  (zero taps for the blind user; the one failure they must fix — WiFi toggle off — is
-  spoken once in Bangla). Gated by `AppConstants.enablePiAutoJoin`.
+  (zero taps). **First launch only**, speaks Bangla guidance that the one-time consent
+  window is coming and what to press (the dialog is an Android security boundary — it
+  cannot be auto-accepted; approval is remembered by the OS afterwards). WiFi-toggle-off
+  is also spoken once. Gated by `AppConstants.enablePiAutoJoin`.
 - **`pi_vision_screen.dart`** — manual WiFi button kept as debug/fallback.
 - **`constants.dart`** — `piApSsid='SmartCane-Cam'`, `piApPsk='smartcane123'`,
   `enablePiAutoJoin=true`. SSID/PSK must match the Pi's `smartcane-ap` profile.

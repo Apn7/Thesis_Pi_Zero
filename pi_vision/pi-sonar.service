@@ -1,9 +1,12 @@
-# systemd unit: auto-start the HC-SR04 distance sender on boot.
+# systemd unit: auto-start the cane's distance loop on boot.
 #
-# Runs sonar_main.py once the network is up, so the cane reports distance as
-# soon as it powers on — no laptop / SSH needed. sonar_main.py auto-detects the
-# phone as the default gateway (on the phone's hotspot) and reconnects on its
-# own if the app isn't open yet, so the Pi can boot first and just wait.
+# Runs sonar_main.py, which now does two jobs:
+#   1. STANDALONE alerts — classifies every HC-SR04 reading on the Pi (same
+#      thresholds + hysteresis as the app) and drives the buzzer + vibration
+#      motor. Works with no phone, no app, no network.
+#   2. Phone telemetry — a background thread auto-detects the phone (hotspot
+#      gateway or AP client) and streams the raw readings; the app classifies
+#      them with identical rules, so phone and cane alert in lockstep.
 #
 # This is the WiFi replacement for the ESP32 ultrasonic path; it runs alongside
 # pi-vision.service (camera) — different GPIOs, different TCP port.
@@ -22,11 +25,11 @@
 #   To stop / disable:  sudo systemctl disable --now pi-sonar.service
 
 [Unit]
-Description=Smart Cane - Pi Zero HC-SR04 distance sender
-# Wait until the network is up (joined the hotspot) before starting. The reader
-# uses lgpio directly (no daemon), so there's nothing else to order against.
-After=network-online.target
-Wants=network-online.target
+Description=Smart Cane - Pi Zero distance alerts + phone sender
+# Deliberately NO network-online dependency: the buzzer/vibration reflex must
+# come up even if WiFi never does (standalone cane). The network half of
+# sonar_main.py polls for the phone forever on its own thread, so starting
+# before the network is up is the designed-for case, not a race.
 
 [Service]
 Type=simple
