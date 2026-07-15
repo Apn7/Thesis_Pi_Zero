@@ -112,6 +112,7 @@ class FeedbackController:
         self._lgpio = None
         self._h = None
         self._has_pwm = False
+        self._motor_pwm_active = False
         self._verdict = Verdict.NO_DATA
         self._stop = threading.Event()
         self._thread = None
@@ -210,11 +211,17 @@ class FeedbackController:
                 buzzer_on = want_buzzer
 
     def _set_motor(self, on):
-        try:
-            if self._has_pwm and not on:
-                # Clear any duty-cap PWM before parking the pin low, else the
-                # PWM generator keeps toggling it.
+        # Cancel the duty-cap PWM ONLY if it was actually started, and in its
+        # own try-block: calling tx_pwm on a pin with no active PWM can throw,
+        # and an exception here must never block the OFF write below — that
+        # latched the motor on permanently (field bug, 2026-07-15).
+        if self._motor_pwm_active:
+            try:
                 self._lgpio.tx_pwm(self._h, config.MOTOR_GPIO, 0, 0)
+            except Exception as e:
+                log.warning("Motor PWM cancel failed: %s", e)
+            self._motor_pwm_active = False
+        try:
             self._lgpio.gpio_write(
                 self._h, config.MOTOR_GPIO, _MOTOR_ON if on else _MOTOR_OFF
             )
@@ -227,6 +234,7 @@ class FeedbackController:
             self._lgpio.tx_pwm(
                 self._h, config.MOTOR_GPIO, config.MOTOR_PWM_HZ, duty
             )
+            self._motor_pwm_active = True
         except Exception as e:
             log.warning("Motor PWM failed: %s", e)
 
