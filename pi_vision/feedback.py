@@ -173,6 +173,14 @@ class FeedbackController:
         t0 = time.monotonic()
         motor_on = False
         buzzer_on = False
+        # Duty-capped drive (the §9 motor-on-5V upgrade): each pulse opens at
+        # full drive for MOTOR_KICKSTART_MS (an ERM may not spin up from rest
+        # at partial duty), then settles to MOTOR_PWM_DUTY_PCT via PWM. At the
+        # default duty of 100 this whole branch is inert — plain on/off drive.
+        duty = min(100, max(0, int(config.MOTOR_PWM_DUTY_PCT)))
+        duty_capped = self._has_pwm and duty < 100
+        motor_t0 = 0.0
+        settled = False
         while not self._stop.wait(config.FEEDBACK_TICK_S):
             v = self._verdict
             if v is not active:  # verdict changed → new pattern from t=0
@@ -186,17 +194,41 @@ class FeedbackController:
             if want_motor != motor_on:
                 self._set_motor(want_motor)
                 motor_on = want_motor
+                motor_t0 = time.monotonic()
+                settled = False
+            elif (
+                motor_on
+                and duty_capped
+                and not settled
+                and (time.monotonic() - motor_t0) * 1000.0
+                >= config.MOTOR_KICKSTART_MS
+            ):
+                self._set_motor_duty(duty)
+                settled = True
             if want_buzzer != buzzer_on:
                 self._set_buzzer(want_buzzer)
                 buzzer_on = want_buzzer
 
     def _set_motor(self, on):
         try:
+            if self._has_pwm and not on:
+                # Clear any duty-cap PWM before parking the pin low, else the
+                # PWM generator keeps toggling it.
+                self._lgpio.tx_pwm(self._h, config.MOTOR_GPIO, 0, 0)
             self._lgpio.gpio_write(
                 self._h, config.MOTOR_GPIO, _MOTOR_ON if on else _MOTOR_OFF
             )
         except Exception as e:  # a GPIO hiccup must not kill the thread
             log.warning("Motor write failed: %s", e)
+
+    def _set_motor_duty(self, duty):
+        """Drop an already-spinning motor to the sustained duty cap (5V path)."""
+        try:
+            self._lgpio.tx_pwm(
+                self._h, config.MOTOR_GPIO, config.MOTOR_PWM_HZ, duty
+            )
+        except Exception as e:
+            log.warning("Motor PWM failed: %s", e)
 
     def _set_buzzer(self, on):
         if not self._has_pwm:
@@ -221,10 +253,11 @@ class FeedbackController:
         if self._h is not None and self._lgpio is not None:
             # Whatever happened, leave the hardware quiet.
             if self._has_pwm:
-                try:
-                    self._lgpio.tx_pwm(self._h, config.BUZZER_GPIO, 0, 0)
-                except Exception:
-                    pass
+                for gpio in (config.BUZZER_GPIO, config.MOTOR_GPIO):
+                    try:
+                        self._lgpio.tx_pwm(self._h, gpio, 0, 0)
+                    except Exception:
+                        pass
             for gpio, level in (
                 (config.BUZZER_GPIO, _BUZZER_OFF),
                 (config.MOTOR_GPIO, _MOTOR_OFF),

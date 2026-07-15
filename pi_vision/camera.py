@@ -106,7 +106,10 @@ class Camera:
                 cap_controls["ExposureTime"] = config.MAX_EXPOSURE_TIME_US
             cfg_kwargs = dict(
                 main={"size": self._size},
-                transform=Transform(hflip=True, vflip=True),
+                # Mount-orientation correction — see config CAMERA_HFLIP/VFLIP.
+                transform=Transform(
+                    hflip=config.CAMERA_HFLIP, vflip=config.CAMERA_VFLIP
+                ),
                 controls=cap_controls,
                 # Cap how many in-flight buffers libcamera allocates. The default
                 # for video is 6; with the big full-FoV raw stream below that

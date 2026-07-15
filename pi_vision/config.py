@@ -61,6 +61,20 @@ SENSOR_OUTPUT_SIZE = (2328, 1748)  # full-FoV 2x2-binned IMX519 mode; None = aut
 # REFLASH.md) — that's the kernel-side contiguous-memory budget, not RAM.
 CAMERA_BUFFER_COUNT = 3
 
+# --- Mount orientation -------------------------------------------------------
+# Sensor-to-world flips, applied in-pipeline by libcamera (free — no CPU cost).
+# These track HOW THE MODULE IS PHYSICALLY MOUNTED on the cane, so re-mounting
+# the camera is a config edit, not a code change:
+#   * original mount (through 2026-07): module upside down → hflip+vflip
+#     (180°) undid it.
+#   * current mount (2026-07-15): module flipped the OTHER way relative to the
+#     original, i.e. right-side up → no correction needed.
+# If the phone shows the world inverted after a re-mount, toggle BOTH together
+# (they form a 180° rotation; toggling one alone mirrors the image, which
+# would flip left/right in the app's zone logic).
+CAMERA_HFLIP = False
+CAMERA_VFLIP = False
+
 # --- Focus / sharpness -------------------------------------------------------
 # We use the mainline `imx519` dtoverlay, not Arducam's fork, so libcamera has
 # no AF algorithm loaded — LENS_POSITION / AF_MODE are ignored by picamera2.
@@ -263,9 +277,27 @@ FEEDBACK_TICK_S = 0.01
 # energised"; PWM is what makes that energised path actually produce sound.
 BUZZER_GPIO = 5   # physical pin 29; boot pull-UP keeps it silent
 BUZZER_TONE_HZ = 2700   # audible passive-piezo drive frequency; not a spec
-                        # value — just a clearly-audible tone, tune by ear
+                        # value. LOUDNESS LEVER: an unlabelled piezo is
+                        # noticeably louder at its mechanical resonance —
+                        # run `python3 buzzer_sweep.py` on the cane, note the
+                        # loudest frequency, and set it here. (The 50 % PWM
+                        # duty in feedback.py is already the max-loudness duty
+                        # for a square wave — don't bother tuning that.)
 
 # KS0450-class vibration motor module, HIGH-level trigger (SI2302 N-MOSFET
 # low-side switch, logic-level — fine from a 3.3 V GPIO). drive HIGH = vibrate;
 # PWM on this pin scales intensity. VCC on 3V3 (5 V upgrade path in the doc).
 MOTOR_GPIO = 13   # physical pin 33; boot pull-DOWN keeps it off
+
+# Motor sustained-drive duty (%). INTENSITY LEVER: at 3V3 VCC keep 100 — the
+# 3 V ERM has no headroom and PWM below 100 only weakens it. The real strength
+# upgrade is hardware (BUZZER_VIBRATION_WIRING.md §9): move motor VCC from
+# pin 17 (3V3) → pin 4 (5V) — much harder vibration — then cap sustained
+# drive here at ~60 so the time-average is ≈3 V and the coin motor survives.
+# 100 = plain on/off drive (no PWM involved). Values < 100 drive the pin with
+# PWM after a full-power kick-start (an ERM at partial duty may never spin up
+# from rest — feedback.py always opens each pulse at 100 % for
+# MOTOR_KICKSTART_MS first).
+MOTOR_PWM_DUTY_PCT = 100
+MOTOR_PWM_HZ = 250        # ERM drive PWM rate; uncritical, well above flicker
+MOTOR_KICKSTART_MS = 60   # full-drive spin-up before dropping to the duty cap
